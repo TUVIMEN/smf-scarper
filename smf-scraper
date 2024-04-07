@@ -1,0 +1,306 @@
+#!/bin/bash
+# by Dominik Stanisław Suchora <suchora.dominik7@gmail.com>
+# License: GNU GPLv3
+
+shopt -s extglob
+
+declare maxprocs='1' url _cookies t_pass
+
+IFS=$'\n'
+
+ucurl() {
+    curl -k -L -g -m 120 -s -b "$_cookies" --user-agent 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) QtWebEngine/5.15.2 Chrome/87.0.4280.144 Safari/537.36' -H 'Accept-Encoding: gzip, deflate' --compressed "$@" | tr -d '\n\t\r\a\v'
+}
+
+get_next_1() {
+    hgrep '.* @m".*:.*class=\"navPages\"" | "%i\n"' | tail -n1 | recode HTML..UTF8 | sed -E 's#.*<b>[0-9]+</b>##;s#[^<]*<a [^>]*href="([^"]+)".*#\1#;/;all$/d;/^\]/d;/^#/d'
+}
+
+get_topic_1() {
+    [[ "$1" =~ ^http[s]?://([[:alnum:]-]+\.)+[[:alpha:]]+/.*([?/&;]topic[=,]|-t)([[:digit:]]+) ]] || { echo "improper url - $1"; return; }
+    local -r id="${BASH_REMATCH[3]}"
+    [ -e "$id" ] && return
+    local t="$t_pass"
+    t_pass=""
+    [ -z "$t" ] && {
+        echo "$1" >&2
+        t="$(ucurl "$1")"
+    }
+    local t2 cookies
+    local next
+
+    {
+    echo "$1" #link
+    echo "$id" #id
+    echo "$(hgrep 'td #top_subject | "%i\n"' <<< "$t" | sed 's/[^:]*: //;s/([^(]*)//;s/&nbsp;//g;s/ *$//')" #title
+    echo "$(hgrep 'td #top_subject | "%i\n"' <<< "$t" |  sed -E 's/.*\(//g;s/.* ([0-9]+) .*/\1/')" #viewed
+    echo "$(hgrep -E 'div @a[0]; (div|span) .nav @l[1]; a .nav | "%i\t"' <<< "$t")" #path [:-2]
+
+    while :
+    do
+        for i in $(hgrep 'form #quickModForm; table @l[1]; tr @l[1] @m"id=\"subject_[0-9]*\""; ; tr @l[0] @M"\.googlesyndication.com/"' <<< "$t")
+        do
+            {
+            echo "$(hgrep 'div #subject_[0-9]* | "%(id)a\n"' <<< "$i" | sed 's/.*_//')" #postid
+            echo "$(hgrep 'td valign="middle"; div .smalltext | "%i\n"' <<< "$i" | sed 's/.* ://;s/^<\/b> //;s/ &#187;//g;s/<br *\/>.*//;s/<[^>]*>//g;s/ *$//')" #date
+            echo "$(hgrep 'div .post | "%i\n"' <<< "$i")" #body
+            echo "$(hgrep 'div .signature | "%i\n"' <<< "$i")" #signature
+            echo "$(hgrep 'td valign=top rowspan=2; b @l[1]; a href | "%i\n"' <<< "$i")" #user
+            echo "$(hgrep 'td valign=top rowspan=2; b @l[1]; a href | "%(href)a\n"' <<< "$i" | sed 's/.*;//;s/.*-//;s/\.html$//;s/^u//;s/^=//')" #userid
+            echo "$(hgrep 'td valign=top rowspan=2; img .avatar src | "%(src)a\n"' <<< "$i")" #avatar
+            echo "$(hgrep 'td #modified_[0-9]*; .* @M"<" | "%i\n"' <<< "$i")" #edited
+            echo "$(hgrep 'span #gpbp_score_[0-9]* | "%i\n"' <<< "$i")" #score
+            echo "$(hgrep 'a href #link_[0-9]* | "%(href)a\a"' <<< "$i")" #attachments
+            echo "$(hgrep 'td valign=top rowspan=2; div .smalltext | "%i\n"' <<< "$i" | sed 's/\(<br \/>\)\+/\n/g' | sed '/^$/d;/<img.* class="avatar"/d' | paste -sd '')" #userinfo
+            } | paste -sd '\t'
+        done
+
+        next="$(get_next_1 <<< "$t")"
+        [ -z "$next" ] && break
+        echo "$next" >&2
+        t="$(ucurl "$next")"
+    done
+    } | jq -RnMcs '
+        (inputs | split("\n")) as $lines |
+        .["link"]=$lines[0] |
+        .["id"]=$lines[1] |
+        .["title"]=$lines[2] |
+        .["viewed"]=$lines[3] |
+        .["path"]=($lines[4] | split("\t"))[:-2] |
+        .["posts"]=($lines[5:-1] | map(split("\t") | {
+            ("postid"):.[0],
+            ("date"):.[1],
+            ("body"):.[2],
+            ("signature"):.[3],
+            ("user"):.[4],
+            ("userid"):.[5],
+            ("avatar"):.[6],
+            ("edited"):.[7],
+            ("score"):.[8],
+            ("attachments"):(.[9] | split("")),
+            ("userinfo"):(.[10] | split("")),
+        }))' > "$id"
+}
+
+get_forum_1() {
+    local t="$t_pass" next
+    t_pass=""
+    [ -z "$t" ] && {
+        echo "$1" >&2
+        t="$(ucurl "$1")"
+    }
+    while :
+    do
+        for i in $(hgrep 'td .windowbg2 @m"name=\"b[0-9]*\""; b @l[1]; a href @l[1] | "%(href)a\n"' <<< "$t")
+        do
+            get_forum_1 "$i"
+        done
+        for i in $(hgrep 'td ."windowbg[0-9]*" @m"<span class=\"smalltext\""; a href @l[1] | "%(href)a\n"' <<< "$t" | sed 's/[.;]msg[^\/]*#new$//;s/#new$//')
+        do
+            [ "$(jobs | wc -l)" -gt "$maxprocs" ] && wait %%
+            get_topic_1 "$i" &
+        done
+        next="$(get_next_1 <<< "$t")"
+        [ -z "$next" ] && break
+        echo "$next" >&2
+        t="$(ucurl "$next")"
+    done
+    wait
+}
+
+get_next_2() {
+    hgrep 'div .pagelinks | "%i\n"' | sed 's/<a [^>]*href="\([^"]*\)"[^>]*>/\t\1\t/g;s/<span [^>]*class="current_page"[^>]*>\([^>]*\)<\/span>/[\1]/;s/<[^>]*>//g;s/.*\[[^]]*\]//;s/ //g;s/^\t*//;s/\t.*//;s/&nbsp;//g;/^$/d;q'
+}
+
+get_topic_2() {
+    local t="$t_pass"
+    t_pass=""
+    [[ "$1" =~ ^http[s]?://([[:alnum:]-]+\.)+[[:alpha:]]+/.*([?/&;]topic[=,])([[:digit:]]+) ]]
+    local id="${BASH_REMATCH[3]}"
+    [ -z "$id" ] && {
+        [ -z "$t" ] && {
+            echo "$1" >&2
+            t="$(ucurl "$1")"
+        }
+        id="$(hgrep 'input name=sd_topic value | "%(value)a\n"' <<< "$t")"
+    }
+    [ -e "$id" ] && return
+    [ -z "$t" ] && {
+        echo "$1" >&2
+        t="$(ucurl "$1")"
+    }
+    local t2 cookies
+    local next
+
+    {
+    echo "$1" #link
+    echo "$id" #id
+    t2="$(hgrep 'div #forumposts; div .cat_bar; h3 .catbg | "%i\n"' <<< "$t"  | sed 's/<[^>]*>//g;s/ &nbsp;/ /;s/ ([^)]*)$//;s/^[^:]*: //')"
+    if [ -n "$t2" ]
+    then
+        echo "$t2" #title
+        echo "$(hgrep 'div #forumposts; div .cat_bar; h3 .catbg | "%i\n"' <<< "$t"  | sed 's/<[^>]*>//g;s/ &nbsp;/ /;s/.* (\([^)]*\))$/\1/;s/.* \([0-9]*\) .*/\1/')" #viewed
+    else
+        echo "$(hgrep 'div #forumposts; h1 | "%i\n", h[0-9] .display_title; span #top_subject | "%i\n"' <<< "$t")" #title
+        echo "$(hgrep 'div #forumposts; div .display-info;  li @M"comments" | "%i\n"' <<< "$t" | sed 's/<[^>]*>//g; s/ .*//')" #viewed
+    fi
+
+    t2="$(hgrep 'div .navigate_section | "%i\n"' <<< "$t" | head -n1 | hgrep 'li; a -href=".*action=.*" @l[1]; .* @M"<" | "%i\t"')"
+    [ -z "$t2" ] && t2="$(hgrep 'div .container; ol .breadcrumb' <<< "$t" | head -n1 | hgrep 'ol; li @l[1]; a @l[1]; .* @M"<" | "%i\t"')"
+    echo "$t2" #path [:-2]
+
+    while :
+    do
+        for i in $(hgrep 'form #quickModForm; div @l[1]' <<< "$t")
+        do
+            {
+            echo "$(hgrep 'div #msg_[0-9]* | "%(id)a\n"' <<< "$i" | sed 's/^msg_//')" #postid
+            echo "$(hgrep -E 'div .postarea; div .keyinfo; (div|a) .smalltext | "%i\n"' <<< "$i" | sed 's/.*>//;s/^ //;s/&#187;//;s/ $//')" #date
+            echo "$(hgrep 'div .post; div #msg_[0-9]* @l[1] | "%i\n"' <<< "$i")" #body
+            echo "$(hgrep 'div .signature | "%i\n"' <<< "$i")" #signature
+            echo "$(hgrep '.* #modified_[0-9]* | "%i\n"' <<< "$i")" #edited
+            echo "$(hgrep 'div .attached; div .attachments_top; a href | "%(href)a"' <<< "$i")" #attachments
+            echo "$(hgrep 'div .poster; h4; a @l[1] | "%i\n"' <<< "$i")" #user
+            echo "$(hgrep 'div .poster; h4; a href @l[1] | "%(href)a\n"' <<< "$i" | sed 's/^.*;u=//')" #userid
+            echo "$(hgrep 'div .poster; { ul #msg_[0-9]*_extra_info, ul .user_info }; li .avatar; img src | "%(src)a\n"' <<< "$i")" #avatar
+            echo "$(hgrep 'div .poster; { ul #msg_[0-9]*_extra_info, ul .user_info }; li -.avatar class | "%(class)a%i"' <<< "$i")" #userinfo
+            } | paste -sd '\t'
+        done
+
+        next="$(get_next_2 <<< "$t")"
+        [ -z "$next" ] && break
+        echo "$next" >&2
+        t="$(ucurl "$next")"
+    done
+    } | jq -RnMcs '
+        (inputs | split("\n")) as $lines |
+        .["link"]=$lines[0] |
+        .["id"]=$lines[1] |
+        .["title"]=$lines[2] |
+        .["viewed"]=$lines[3] |
+        .["path"]=($lines[4] | split("\t"))[:-2] |
+        .["posts"]=($lines[5:-1] | map(split("\t") | {
+            ("postid"):.[0],
+            ("date"):.[1],
+            ("body"):.[2],
+            ("signature"):.[3],
+            ("edited"):.[4],
+            ("attachments"):(.[5] | split(""))[:-1],
+            ("user"):.[6],
+            ("userid"):.[7],
+            ("avatar"):.[8],
+            ("userinfo"):(.[9] | split("")[:-1] | map(split("") | {
+                ("key"):.[0],
+                ("value"):.[1]
+            })),
+        }))' > "$id"
+}
+
+get_forum_2() {
+    local t="$t_pass" next
+    t_pass=""
+    [ -z "$t" ] && {
+        echo "$1" >&2
+        t="$(ucurl "$1")"
+    }
+    while :
+    do
+        for i in $(hgrep -E '{ .* #board_[0-9]+, td .windowbg2 }; a (name|id)=b[0-9]+ href | "%(href)a\n"' <<< "$t")
+        do
+            get_forum_2 "$i"
+        done
+        for i in $(hgrep 'span #msg_[0-9]*; a href | "%(href)a\n"' <<< "$t")
+        do
+            [ "$(jobs | wc -l)" -gt "$maxprocs" ] && wait %%
+            get_topic_2 "$i" &
+        done
+        next="$(get_next_2 <<< "$t")"
+        [ -z "$next" ] && break
+        echo "$next" >&2
+        t="$(ucurl "$next")"
+    done
+    wait
+}
+
+version_judge() {
+    echo "$1" >&2
+    t_pass="$(ucurl "$1")"
+    if grep -q '>Powered by SMF 1\.[^<]*<' <<< "$t_pass"
+    then
+        $2 "$1"
+    else
+        $3 "$1"
+    fi
+    t_pass=""
+}
+
+get_topic() {
+    version_judge "$1" 'get_topic_1' 'get_topic_2'
+}
+
+get_forum() {
+    version_judge "$1" 'get_forum_1' 'get_forum_2'
+}
+
+usage() {
+    printf '%s [OPTION]... [URL]...\n' "${0##*/}"
+    printf 'Scrape smf forums from URL to json.\n\n'
+    printf 'Options:\n  -d,\t--dir DIR\t\tchange directory to DIR\n'
+    printf '  -p,\t--max-procs NUM\t\tset number of processes to run at a time\n'
+    printf '  -b,\t--cookie DATA|FILENAME\tpass cookie to curl\n'
+    printf '  -t,\t--topic URL\t\tpass URL as topic link\n'
+    printf '     \t--topic1 URL\t\tpass URL as topic link 1.x version\n'
+    printf '     \t--topic2 URL\t\tpass URL as topic link 2.x version\n'
+    printf '  -f,\t--forum URL\t\tpass URL as forum link\n'
+    printf '     \t--forum1 URL\t\tpass URL as forum link 1.x version\n'
+    printf '     \t--forum2 URL\t\tpass URL as forum link 2.x version\n'
+    printf '  -h,\t--help\t\t\tshow this message\n'
+}
+
+[ "$#" -eq 0 ] && { usage >&2; exit 1; }
+
+while [ "$#" -gt 0 ]
+do
+    case "$1" in
+        -d|--dir) cd "$2" || break; shift;;
+        -t|--topic)
+            get_topic "$2"
+            shift;;
+        --topic1)
+            get_topic_1 "$2"
+            shift;;
+        --topic2)
+            get_topic_2 "$2"
+            shift;;
+        -f|--forum)
+            get_forum "$2"
+            shift;;
+        --forum1)
+            get_forum_1 "$2"
+            shift;;
+        --forum2)
+            get_forum_2 "$2"
+            shift;;
+        -b|--cookie) _cookies="$2"; shift;;
+        -p|--max-procs) maxprocs="$2"; shift;;
+        -h|--help) usage >&2; exit;;
+        -*) usage >&2; exit 1;;
+        *) break;;
+    esac
+    shift
+done
+
+while [ "$#" -gt 0 ]
+do
+    case "$1" in
+        http?(s)://+(+([[:alnum:]-]).)+([[:alpha:]])/*@([?/&;]topic[=,]|-t)+([[:digit:]])*)
+            get_topic "$1";;
+        http?(s)://+(+([[:alnum:]-]).)+([[:alpha:]])/*@([?/&;]board[=,]|-t)+([[:digit:]])*)
+            get_forum "$1";;
+        http?(s)://+(+([[:alnum:]-]).)+([[:alpha:]])/?(*/)index.php*)
+            get_forum "$1";;
+        http?(s)://+(+([[:alnum:]-]).)+([[:alpha:]])*)
+            get_forum "$1";
+    esac
+    shift
+done
