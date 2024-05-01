@@ -13,7 +13,7 @@ ucurl() {
 }
 
 get_next_1() {
-    hgrep '.* @m".*:.*class=\"navPages\"" | "%i\n"' | tail -n1 | recode HTML..UTF8 | sed -E 's#.*<b>[0-9]+</b>##;s#[^<]*<a [^>]*href="([^"]+)".*#\1#;/;all$/d;/^\]/d;/^#/d'
+    reliq '.* m@B>".*:.*class=\"navPages\"" [-1] | "%i\n"' | recode HTML..UTF8 | sed -E 's#.*<b>[0-9]+</b>##;s#[^<]*<a [^>]*href="([^"]+)".*#\1#;/;all$/d;/^\]/d;/^#/d'
 }
 
 get_topic_1() {
@@ -32,28 +32,29 @@ get_topic_1() {
     {
     echo "$1" #link
     echo "$id" #id
-    echo "$(hgrep 'td #top_subject | "%i\n"' <<< "$t" | sed 's/[^:]*: //;s/([^(]*)//;s/&nbsp;//g;s/ *$//')" #title
-    echo "$(hgrep 'td #top_subject | "%i\n"' <<< "$t" |  sed -E 's/.*\(//g;s/.* ([0-9]+) .*/\1/')" #viewed
-    echo "$(hgrep -E 'div @a[0]; (div|span) .nav @l[1]; a .nav | "%i\t"' <<< "$t")" #path [:-2]
+    reliq '
+        . td #top_subject | "%i\n" / sed "s/[^:]*: //;s/([^(]*)//;s/&nbsp;//g;s/ *$//",
+        . td #top_subject | "%i\n" /  sed "s/.*\(//g;s/.* ([0-9]+) .*/\1/" "E",
+        . div a@[0]; E>(div|span) .nav l@[1]; a .nav | "%i\t" / echo "" "\n"
+    ' <<< "$t"
 
     while :
     do
-        for i in $(hgrep 'form #quickModForm; table @l[1]; tr @l[1] @m"id=\"subject_[0-9]*\""; ; tr @l[0] @M"\.googlesyndication.com/"' <<< "$t")
-        do
-            {
-            echo "$(hgrep 'div #subject_[0-9]* | "%(id)a\n"' <<< "$i" | sed 's/.*_//')" #postid
-            echo "$(hgrep 'td valign="middle"; div .smalltext | "%i\n"' <<< "$i" | sed 's/.* ://;s/^<\/b> //;s/ &#187;//g;s/<br *\/>.*//;s/<[^>]*>//g;s/ *$//')" #date
-            echo "$(hgrep 'div .post | "%i\n"' <<< "$i")" #body
-            echo "$(hgrep 'div .signature | "%i\n"' <<< "$i")" #signature
-            echo "$(hgrep 'td valign=top rowspan=2; b @l[1]; a href | "%i\n"' <<< "$i")" #user
-            echo "$(hgrep 'td valign=top rowspan=2; b @l[1]; a href | "%(href)a\n"' <<< "$i" | sed 's/.*;//;s/.*-//;s/\.html$//;s/^u//;s/^=//')" #userid
-            echo "$(hgrep 'td valign=top rowspan=2; img .avatar src | "%(src)a\n"' <<< "$i")" #avatar
-            echo "$(hgrep 'td #modified_[0-9]*; .* @M"<" | "%i\n"' <<< "$i")" #edited
-            echo "$(hgrep 'span #gpbp_score_[0-9]* | "%i\n"' <<< "$i")" #score
-            echo "$(hgrep 'a href #link_[0-9]* | "%(href)a\a"' <<< "$i")" #attachments
-            echo "$(hgrep 'td valign=top rowspan=2; div .smalltext | "%i\n"' <<< "$i" | sed 's/\(<br \/>\)\+/\n/g' | sed '/^$/d;/<img.* class="avatar"/d' | paste -sd '')" #userinfo
-            } | paste -sd '\t'
-        done
+        reliq '
+            form #quickModForm; table l@[1]; tr l@[1] m@B>"id=\"subject_[0-9]*\""; ; tr l@[0] m@v>".googlesyndication.com/"; {
+                . div #B>subject_[0-9]* | "%(id)v\n" / sed "s/.*_//",
+                . td valign=middle; div .smalltext | "%i\n" / sed "s/.* ://;s/^<\/b> //;s/ &#187;//g;s/<br *\/>.*//;s/<[^>]*>//g;s/ *$//",
+                . div .post | "%i\n",
+                . div .signature | "%i\n",
+                . td valign=top rowspan=2; b l@[1]; a href | "%i\n",
+                . td valign=top rowspan=2; b l@[1]; a href | "%(href)v\n" / sed "s/.*;//;s/.*-//;s/\.html$//;s/^u//;s/^=//",
+                . td valign=top rowspan=2; img .avatar src | "%(src)v\n",
+                . td #B>modified_[0-9]*; * c@[0] | "%i\n",
+                . span #B>gpbp_score_[0-9]* | "%i\n",
+                . a href #B>link_[0-9]* | "%(href)v\a" / echo "" "\n",
+                . td valign=top rowspan=2; div .smalltext | "%i\n" / sed "s/\(<br \/>\)\+/\n/g" sed "/^$/d;/<img.* class=\"avatar\"/d" tr "\n" "\a" echo "" "\n"
+            } | tr "\n" "\t" echo "" "\n"
+        ' <<< "$t"
 
         next="$(get_next_1 <<< "$t")"
         [ -z "$next" ] && break
@@ -77,8 +78,8 @@ get_topic_1() {
             ("avatar"):.[6],
             ("edited"):.[7],
             ("score"):.[8],
-            ("attachments"):(.[9] | split("")),
-            ("userinfo"):(.[10] | split("")),
+            ("attachments"):(.[9] | split(""))[:-1],
+            ("userinfo"):(.[10] | split(""))[:-1],
         }))' > "$id"
 }
 
@@ -91,11 +92,11 @@ get_forum_1() {
     }
     while :
     do
-        for i in $(hgrep 'td .windowbg2 @m"name=\"b[0-9]*\""; b @l[1]; a href @l[1] | "%(href)a\n"' <<< "$t")
+        for i in $(reliq 'td .windowbg2 m@B>"name=\"b[0-9]*\""; b l@[1]; a href l@[1] | "%(href)v\n"' <<< "$t")
         do
             get_forum_1 "$i"
         done
-        for i in $(hgrep 'td ."windowbg[0-9]*" @m"<span class=\"smalltext\""; a href @l[1] | "%(href)a\n"' <<< "$t" | sed 's/[.;]msg[^\/]*#new$//;s/#new$//')
+        for i in $(reliq 'td .B>"windowbg[0-9]*" m@"<span class=\"smalltext\""; a href l@[1] | "%(href)v\n" / sed "s/[.;]msg[^\/]*#new$//;s/#new$//"' <<< "$t")
         do
             [ "$(jobs | wc -l)" -gt "$maxprocs" ] && wait %%
             get_topic_1 "$i" &
@@ -109,7 +110,7 @@ get_forum_1() {
 }
 
 get_next_2() {
-    hgrep 'div .pagelinks | "%i\n"' | sed 's/<a [^>]*href="\([^"]*\)"[^>]*>/\t\1\t/g;s/<span [^>]*class="current_page"[^>]*>\([^>]*\)<\/span>/[\1]/;s/<[^>]*>//g;s/.*\[[^]]*\]//;s/ //g;s/^\t*//;s/\t.*//;s/&nbsp;//g;/^$/d;q'
+    reliq 'div .pagelinks [0]; E>(a|span|strong) m@vB>"[a-zA-Z .]" l@[1] | "%(href)v %i\n" / sed "$q; /^ /{N;D;s/ .*//;p;q}" "n"'
 }
 
 get_topic_2() {
@@ -122,7 +123,7 @@ get_topic_2() {
             echo "$1" >&2
             t="$(ucurl "$1")"
         }
-        id="$(hgrep 'input name=sd_topic value | "%(value)a\n"' <<< "$t")"
+        id="$(reliq 'input name=sd_topic value | "%(value)v\n"' <<< "$t")"
     }
     [ -e "$id" ] && return
     [ -z "$t" ] && {
@@ -135,37 +136,34 @@ get_topic_2() {
     {
     echo "$1" #link
     echo "$id" #id
-    t2="$(hgrep 'div #forumposts; div .cat_bar; h3 .catbg | "%i\n"' <<< "$t"  | sed 's/<[^>]*>//g;s/ &nbsp;/ /;s/ ([^)]*)$//;s/^[^:]*: //')"
+    t2="$(reliq 'div #forumposts; div .cat_bar; h3 .catbg | "%i\n" / sed "s/<[^>]*>//g;s/ &nbsp;/ /;s/ ([^)]*)$//;s/^[^:]*: //"' <<< "$t")"
     if [ -n "$t2" ]
     then
         echo "$t2" #title
-        echo "$(hgrep 'div #forumposts; div .cat_bar; h3 .catbg | "%i\n"' <<< "$t"  | sed 's/<[^>]*>//g;s/ &nbsp;/ /;s/.* (\([^)]*\))$/\1/;s/.* \([0-9]*\) .*/\1/')" #viewed
+        echo "$(reliq 'div #forumposts; div .cat_bar; h3 .catbg | "%i\n" / sed "s/<[^>]*>//g;s/ &nbsp;/ /;s/.* (\([^)]*\))$/\1/;s/.* \([0-9]*\) .*/\1/"' <<< "$t")" #viewed
     else
-        echo "$(hgrep 'div #forumposts; h1 | "%i\n", h[0-9] .display_title; span #top_subject | "%i\n"' <<< "$t")" #title
-        echo "$(hgrep 'div #forumposts; div .display-info;  li @M"comments" | "%i\n"' <<< "$t" | sed 's/<[^>]*>//g; s/ .*//')" #viewed
+        echo "$(reliq 'div #forumposts; h1 | "%i\n", B>h[0-9] .display_title; span #top_subject | "%i\n"' <<< "$t")" #title
+        echo "$(reliq 'div #forumposts; div .display-info;  li m@v>"comments" | "%i\n" / sed "s/<[^>]*>//g; s/ .*//"' <<< "$t")" #viewed
     fi
 
-    t2="$(hgrep 'div .navigate_section | "%i\n"' <<< "$t" | head -n1 | hgrep 'li; a -href=".*action=.*" @l[1]; .* @M"<" | "%i\t"')"
-    [ -z "$t2" ] && t2="$(hgrep 'div .container; ol .breadcrumb' <<< "$t" | head -n1 | hgrep 'ol; li @l[1]; a @l[1]; .* @M"<" | "%i\t"')"
+    t2="$(reliq 'div .navigate_section [0]; li; a -href=a>action= l@[1]; * c@[0] | "%i\t"' <<< "$t")"
+    [ -z "$t2" ] && t2="$(reliq 'div .container; ol .breadcrumb [0]; li l@[1]; a l@[1]; * c@[0] | "%i\t"' <<< "$t")"
     echo "$t2" #path [:-2]
 
     while :
     do
-        for i in $(hgrep 'form #quickModForm; div @l[1]' <<< "$t")
-        do
-            {
-            echo "$(hgrep 'div #msg_[0-9]* | "%(id)a\n"' <<< "$i" | sed 's/^msg_//')" #postid
-            echo "$(hgrep -E 'div .postarea; div .keyinfo; (div|a) .smalltext | "%i\n"' <<< "$i" | sed 's/.*>//;s/^ //;s/&#187;//;s/ $//')" #date
-            echo "$(hgrep 'div .post; div #msg_[0-9]* @l[1] | "%i\n"' <<< "$i")" #body
-            echo "$(hgrep 'div .signature | "%i\n"' <<< "$i")" #signature
-            echo "$(hgrep '.* #modified_[0-9]* | "%i\n"' <<< "$i")" #edited
-            echo "$(hgrep 'div .attached; div .attachments_top; a href | "%(href)a"' <<< "$i")" #attachments
-            echo "$(hgrep 'div .poster; h4; a @l[1] | "%i\n"' <<< "$i")" #user
-            echo "$(hgrep 'div .poster; h4; a href @l[1] | "%(href)a\n"' <<< "$i" | sed 's/^.*;u=//')" #userid
-            echo "$(hgrep 'div .poster; { ul #msg_[0-9]*_extra_info, ul .user_info }; li .avatar; img src | "%(src)a\n"' <<< "$i")" #avatar
-            echo "$(hgrep 'div .poster; { ul #msg_[0-9]*_extra_info, ul .user_info }; li -.avatar class | "%(class)a%i"' <<< "$i")" #userinfo
-            } | paste -sd '\t'
-        done
+        reliq 'form #quickModForm; div l@[1]; {
+            . div #B>msg_[0-9]* | "%(id)v\n" / sed "s/^msg_//",
+            . div .postarea; div .keyinfo; E>(div|a) .smalltext | "%i\n" / sed "s/.*>//;s/^ //;s/&#187;//;s/ $//",
+            . div .post; div #B>msg_[0-9]* l@[1] | "%i\n",
+            . div .signature | "%i\n",
+            . * #B>modified_[0-9]* | "%i\n",
+            . div .attached; div .attachments_top; a href | "%(href)v" / echo "" "\n",
+            . div .poster; h4; a l@[1] | "%i\n",
+            . div .poster; h4; a href l@[1] | "%(href)v\n" / sed "s/^.*;u=//",
+            . div .poster; { ul #B>msg_[0-9]*_extra_info, ul .user_info }; li .avatar; img src | "%(src)v\n",
+            . div .poster; { ul #B>msg_[0-9]*_extra_info, ul .user_info }; li -.avatar class | "%(class)v%i" / echo "" "\n"
+        } | tr "\n" "\t" echo "" "\n"' <<< "$t"
 
         next="$(get_next_2 <<< "$t")"
         [ -z "$next" ] && break
@@ -205,11 +203,11 @@ get_forum_2() {
     }
     while :
     do
-        for i in $(hgrep -E '{ .* #board_[0-9]+, td .windowbg2 }; a (name|id)=b[0-9]+ href | "%(href)a\n"' <<< "$t")
+        for i in $(reliq '{ * #E>board_[0-9]+, td .windowbg2 }; a E>(name|id)=E>b[0-9]+ href | "%(href)v\n"' <<< "$t")
         do
             get_forum_2 "$i"
         done
-        for i in $(hgrep 'span #msg_[0-9]*; a href | "%(href)a\n"' <<< "$t")
+        for i in $(reliq 'span #B>msg_[0-9]*; a href | "%(href)v\n"' <<< "$t")
         do
             [ "$(jobs | wc -l)" -gt "$maxprocs" ] && wait %%
             get_topic_2 "$i" &
