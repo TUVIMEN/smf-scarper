@@ -13,7 +13,7 @@ ucurl() {
 }
 
 get_next_1() {
-    reliq '.* m@B>".*:.*class=\"navPages\"" [-1] | "%i\n"' | recode HTML..UTF8 | sed -E 's#.*<b>[0-9]+</b>##;s#[^<]*<a [^>]*href="([^"]+)".*#\1#;/;all$/d;/^\]/d;/^#/d'
+    reliq '.* m@B>".*:.*class=\"navPages\"" [-] | "%i\n"' | recode HTML..UTF8 | sed -E 's#.*<b>[0-9]+</b>##;s#[^<]*<a [^>]*href="([^"]+)".*#\1#;/;all$/d;/^\]/d;/^#/d'
 }
 
 get_topic_1() {
