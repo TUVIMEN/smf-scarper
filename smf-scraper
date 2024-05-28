@@ -13,7 +13,7 @@ ucurl() {
 }
 
 get_next_1() {
-    reliq '.* m@B>".*:.*class=\"navPages\"" [-] | "%i\n"' | recode HTML..UTF8 | sed -E 's#.*<b>[0-9]+</b>##;s#[^<]*<a [^>]*href="([^"]+)".*#\1#;/;all$/d;/^\]/d;/^#/d'
+    reliq '* m@B>".*:.*class=\"navPages\"" [-] | "%i\n"' | recode HTML..UTF8 | sed -E 's#.*<b>[0-9]+</b>##;s#[^<]*<a [^>]*href="([^"]+)".*#\1#;/;all$/d;/^\]/d;/^#/d'
 }
 
 get_topic_1() {
@@ -30,30 +30,29 @@ get_topic_1() {
     local next
 
     {
-    echo "$1" #link
-    echo "$id" #id
+    echo "{\"link\":\"$1\",\"id\":$id}"
     reliq '
-        . td #top_subject | "%i\n" / sed "s/[^:]*: //;s/([^(]*)//;s/&nbsp;//g;s/ *$//",
-        . td #top_subject | "%i\n" /  sed "s/.*\(//g;s/.* ([0-9]+) .*/\1/" "E",
-        . div a@[0]; E>(div|span) .nav l@[1]; a .nav | "%i\t" / echo "" "\n"
+        .title td #top_subject | "%i" / sed "s/[^:]*: //;s/([^(]*)//;s/&nbsp;//g;s/ *$//",
+        .viewed.u td #top_subject | "%i" /  sed "s/.*\(//g;s/.* ([0-9]+) .*/\1/" "E",
+        .path.a("\n") div a@[0]; E>(div|span) .nav l@[1]; a .nav | "%i\n" / line [:-1]
     ' <<< "$t"
 
     while :
     do
         reliq '
-            form #quickModForm; table l@[1]; tr l@[1] m@B>"id=\"subject_[0-9]*\""; ; tr l@[0] m@v>".googlesyndication.com/"; {
-                . div #B>subject_[0-9]* | "%(id)v\n" / sed "s/.*_//",
-                . td valign=middle; div .smalltext | "%i\n" / sed "s/.* ://;s/^<\/b> //;s/ &#187;//g;s/<br *\/>.*//;s/<[^>]*>//g;s/ *$//",
-                . div .post | "%i\n",
-                . div .signature | "%i\n",
-                . td valign=top rowspan=2; b l@[1]; a href | "%i\n",
-                . td valign=top rowspan=2; b l@[1]; a href | "%(href)v\n" / sed "s/.*;//;s/.*-//;s/\.html$//;s/^u//;s/^=//",
-                . td valign=top rowspan=2; img .avatar src | "%(src)v\n",
-                . td #B>modified_[0-9]*; * c@[0] | "%i\n",
-                . span #B>gpbp_score_[0-9]* | "%i\n",
-                . a href #B>link_[0-9]* | "%(href)v\a" / echo "" "\n",
-                . td valign=top rowspan=2; div .smalltext | "%i\n" / sed "s/\(<br \/>\)\+/\n/g" sed "/^$/d;/<img.* class=\"avatar\"/d" tr "\n" "\a" echo "" "\n"
-            } | tr "\n" "\t" echo "" "\n"
+            .posts form #quickModForm; table l@[1]; tr l@[1] m@B>"id=\"subject_[0-9]*\""; tr l@[0] m@v>".googlesyndication.com/"; {
+                .postid.u div #B>subject_[0-9]* | "%(id)v" / sed "s/.*_//",
+                .date td valign=middle; div .smalltext | "%i" / sed "s/.* ://;s/^<\/b> //;s/ &#187;//g;s/<br *\/>.*//;s/<[^>]*>//g;s/ *$//",
+                .body div .post | "%i",
+                .signature div .signature | "%i",
+                .user td valign=top rowspan=2; b l@[1]; a href | "%i",
+                .userid.u td valign=top rowspan=2; b l@[1]; a href | "%(href)v" / sed "s/.*;//;s/.*-//;s/\.html$//;s/^u//;s/^=//",
+                .avatar td valign=top rowspan=2; img .avatar src | "%(src)v",
+                .edited td #B>modified_[0-9]*; * c@[0] | "%i",
+                .score span #B>gpbp_score_[0-9]* | "%i",
+                .attachments.a("\t") a href #B>link_[0-9]* | "%(href)v\t",
+                .userinfo.a("\n") td valign=top rowspan=2; div .smalltext | "%i\n" / sed "s/\(<br \/>\)\+/\n/g" sed "/^$/d;/<img.* class=\"avatar\"/d"
+            } |
         ' <<< "$t"
 
         next="$(get_next_1 <<< "$t")"
@@ -61,26 +60,7 @@ get_topic_1() {
         echo "$next" >&2
         t="$(ucurl "$next")"
     done
-    } | jq -RnMcs '
-        (inputs | split("\n")) as $lines |
-        .["link"]=$lines[0] |
-        .["id"]=$lines[1] |
-        .["title"]=$lines[2] |
-        .["viewed"]=$lines[3] |
-        .["path"]=($lines[4] | split("\t"))[:-2] |
-        .["posts"]=($lines[5:-1] | map(split("\t") | {
-            ("postid"):.[0],
-            ("date"):.[1],
-            ("body"):.[2],
-            ("signature"):.[3],
-            ("user"):.[4],
-            ("userid"):.[5],
-            ("avatar"):.[6],
-            ("edited"):.[7],
-            ("score"):.[8],
-            ("attachments"):(.[9] | split(""))[:-1],
-            ("userinfo"):(.[10] | split(""))[:-1],
-        }))' > "$id"
+    } | jq -srcM '.[0] + .[1] + {"posts":(.[2:] | map(.posts[]))}' > "$id"
 }
 
 get_forum_1() {
@@ -114,7 +94,7 @@ get_next_2() {
 }
 
 get_topic_2() {
-    local t="$t_pass"
+    local t="$t_pass" id t2 t3 next cookies
     t_pass=""
     [[ "$1" =~ ^http[s]?://([[:alnum:]-]+\.)+[[:alpha:]]+/.*([?/&;]topic[=,])([[:digit:]]+) ]]
     local id="${BASH_REMATCH[3]}"
@@ -130,68 +110,49 @@ get_topic_2() {
         echo "$1" >&2
         t="$(ucurl "$1")"
     }
-    local t2 cookies
-    local next
 
     {
-    echo "$1" #link
-    echo "$id" #id
+    echo "{\"link\":\"$1\",\"id\":$id}"
+
     t2="$(reliq 'div #forumposts; div .cat_bar; h3 .catbg | "%i\n" / sed "s/<[^>]*>//g;s/ &nbsp;/ /;s/ ([^)]*)$//;s/^[^:]*: //"' <<< "$t")"
     if [ -n "$t2" ]
     then
-        echo "$t2" #title
-        echo "$(reliq 'div #forumposts; div .cat_bar; h3 .catbg | "%i\n" / sed "s/<[^>]*>//g;s/ &nbsp;/ /;s/.* (\([^)]*\))$/\1/;s/.* \([0-9]*\) .*/\1/"' <<< "$t")" #viewed
+        t3="$(reliq 'div #forumposts; div .cat_bar; h3 .catbg | "%i\n" / sed "s/<[^>]*>//g;s/ &nbsp;/ /;s/.* (\([^)]*\))$/\1/;s/.* \([0-9]*\) .*/\1/"' <<< "$t")"
     else
-        echo "$(reliq 'div #forumposts; h1 | "%i\n", B>h[0-9] .display_title; span #top_subject | "%i\n"' <<< "$t")" #title
-        echo "$(reliq 'div #forumposts; div .display-info;  li m@v>"comments" | "%i\n" / sed "s/<[^>]*>//g; s/ .*//"' <<< "$t")" #viewed
+        t2="$(reliq 'div #forumposts; h1 | "%i\n", B>h[0-9] .display_title; span #top_subject | "%i\n"' <<< "$t")"
+        t3="$(reliq 'div #forumposts; div .display-info;  li m@v>"comments" | "%i\n" / sed "s/<[^>]*>//g; s/ .*//"' <<< "$t")"
     fi
 
-    t2="$(reliq 'div .navigate_section [0]; li; a -href=a>action= l@[1]; * c@[0] | "%i\t"' <<< "$t")"
-    [ -z "$t2" ] && t2="$(reliq 'div .container; ol .breadcrumb [0]; li l@[1]; a l@[1]; * c@[0] | "%i\t"' <<< "$t")"
-    echo "$t2" #path [:-2]
+    echo '{"title":"'"$t2"'","viewed":"'"$t3"'"}'
+
+    t2="$(reliq '.path.a div .navigate_section [0]; li; a -href=a>action= l@[1]; * c@[0] | "%i\n" / line [:-1]' <<< "$t")"
+    [ -z "$t2" ] && t2="$(reliq '.path.a div .container; ol .breadcrumb [0]; li l@[1]; a l@[1]; * c@[0] | "%i\n" / line [:-1]' <<< "$t")"
+    echo "$t2"
 
     while :
     do
-        reliq 'form #quickModForm; div l@[1]; {
-            . div #B>msg_[0-9]* | "%(id)v\n" / sed "s/^msg_//",
-            . div .postarea; div .keyinfo; E>(div|a) .smalltext | "%i\n" / sed "s/.*>//;s/^ //;s/&#187;//;s/ $//",
-            . div .post; div #B>msg_[0-9]* l@[1] | "%i\n",
-            . div .signature | "%i\n",
-            . * #B>modified_[0-9]* | "%i\n",
-            . div .attached; div .attachments_top; a href | "%(href)v" / echo "" "\n",
-            . div .poster; h4; a l@[1] | "%i\n",
-            . div .poster; h4; a href l@[1] | "%(href)v\n" / sed "s/^.*;u=//",
-            . div .poster; { ul #B>msg_[0-9]*_extra_info, ul .user_info }; li .avatar; img src | "%(src)v\n",
-            . div .poster; { ul #B>msg_[0-9]*_extra_info, ul .user_info }; li -.avatar class | "%(class)v%i" / echo "" "\n"
-        } | tr "\n" "\t" echo "" "\n"' <<< "$t"
+        reliq '.posts form #quickModForm; div l@[1]; {
+            .postid.u div #B>msg_[0-9]* | "%(id)v" / sed "s/^msg_//",
+            .date div .postarea; div .keyinfo; E>(div|a) .smalltext | "%i" / sed "s/.*>//;s/^ //;s/&#187;//;s/ $//",
+            .body div .post; div #B>msg_[0-9]* l@[1] | "%i",
+            .signature div .signature | "%i",
+            .edited * #B>modified_[0-9]* | "%i",
+            .attachments.a div .attached; div .attachments_top; a href | "%(href)v\n",
+            .user div .poster; h4; a l@[1] | "%i",
+            .userid.u div .poster; h4; a href l@[1] | "%(href)v" / sed "s/^.*;u=//",
+            .avatar div .poster; { ul #B>msg_[0-9]*_extra_info, ul .user_info }; li .avatar; img src | "%(src)v\n",
+            .userinfo div .poster; { ul #B>msg_[0-9]*_extra_info, ul .user_info }; li -.avatar class; {
+                .key * l@[0] | "%(class)v",
+                .value * l@[0] | "%i"
+            } |
+        } |' <<< "$t"
 
         next="$(get_next_2 <<< "$t")"
         [ -z "$next" ] && break
         echo "$next" >&2
         t="$(ucurl "$next")"
     done
-    } | jq -RnMcs '
-        (inputs | split("\n")) as $lines |
-        .["link"]=$lines[0] |
-        .["id"]=$lines[1] |
-        .["title"]=$lines[2] |
-        .["viewed"]=$lines[3] |
-        .["path"]=($lines[4] | split("\t"))[:-2] |
-        .["posts"]=($lines[5:-1] | map(split("\t") | {
-            ("postid"):.[0],
-            ("date"):.[1],
-            ("body"):.[2],
-            ("signature"):.[3],
-            ("edited"):.[4],
-            ("attachments"):(.[5] | split(""))[:-1],
-            ("user"):.[6],
-            ("userid"):.[7],
-            ("avatar"):.[8],
-            ("userinfo"):(.[9] | split("")[:-1] | map(split("") | {
-                ("key"):.[0],
-                ("value"):.[1]
-            })),
-        }))' > "$id"
+    } | jq -srcM '.[0] + .[1] + .[2] + {"posts":(.[3:] | map(.posts[]))}' > "$id"
 }
 
 get_forum_2() {
