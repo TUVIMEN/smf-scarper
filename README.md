@@ -1,3 +1,7 @@
+# Archive
+
+Any further development has been transfered to [forumscraper](https://github.com/TUVIMEN/forumscraper).
+
 # smf-scraper
 
 A bash script for scraping smf forums in json.
@@ -8,7 +12,7 @@ A bash script for scraping smf forums in json.
  - [jq](https://github.com/stedolan/jq)
 
 ## Installation
-    
+
     install -m 755 smf-scraper /usr/bin
 
 ## Supported links formats
@@ -67,7 +71,7 @@ Download forum into current directory using 4 processes
 
     smf-scraper -p 4 'https://forum.nasm.us/'
 
-Download topic by irregular topic url into DIR 
+Download topic by irregular topic url into DIR
 
     smf-scraper -d DIR -t 'https://forums.cyotek.com/cyotek-copytools/thanks/'
 
